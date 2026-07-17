@@ -3,7 +3,7 @@ use crate::config::{Endpoint, Protocol};
 use crate::observation::{EndpointKey, Timing};
 use anyhow::{Context, Result};
 use chrono::Utc;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use solana_sdk::signature::Signature;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -11,7 +11,7 @@ use tracing::{debug, error, info, warn};
 use yellowstone_grpc_client::{ClientTlsConfig, GeyserGrpcClient};
 use yellowstone_grpc_proto::geyser::{
     subscribe_update::UpdateOneof, CommitmentLevel, SubscribeRequest,
-    SubscribeRequestFilterTransactions,
+    SubscribeRequestFilterTransactions, SubscribeRequestPing,
 };
 
 pub async fn run(endpoint: Endpoint, ctx: CollectorContext) {
@@ -65,7 +65,7 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
         ..Default::default()
     };
 
-    let (_, mut stream) = client
+    let (mut subscribe_tx, mut stream) = client
         .subscribe_with_request(Some(subscribe_request))
         .await?;
     info!(
@@ -94,31 +94,43 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
             anyhow::bail!("server closed stream");
         };
         let update = update?;
-        if let Some(UpdateOneof::Transaction(tx_update)) = update.update_oneof {
-            let received_at = Utc::now();
-            let Some(tx) = tx_update.transaction else {
-                warn!(
-                    endpoint = endpoint.alias,
-                    "Yellowstone transaction update had no transaction"
-                );
-                continue;
-            };
-            let signature = Signature::try_from(tx.signature.as_slice())
-                .context("decode Yellowstone signature")?
-                .to_string();
-            last_tx = Instant::now();
-            debug!(endpoint = endpoint.alias, signature, "Yellowstone tx");
-            ctx.store
-                .record(
-                    ctx.phase(),
-                    signature,
-                    endpoint_key.clone(),
-                    Timing {
-                        received_at,
-                        batch_received_at: None,
-                    },
-                )
-                .await;
+        match update.update_oneof {
+            Some(UpdateOneof::Transaction(tx_update)) => {
+                let received_at = Utc::now();
+                let Some(tx) = tx_update.transaction else {
+                    warn!(
+                        endpoint = endpoint.alias,
+                        "Yellowstone transaction update had no transaction"
+                    );
+                    continue;
+                };
+                let signature = Signature::try_from(tx.signature.as_slice())
+                    .context("decode Yellowstone signature")?
+                    .to_string();
+                last_tx = Instant::now();
+                debug!(endpoint = endpoint.alias, signature, "Yellowstone tx");
+                ctx.store
+                    .record(
+                        ctx.phase(),
+                        signature,
+                        endpoint_key.clone(),
+                        Timing {
+                            received_at,
+                            batch_received_at: None,
+                        },
+                    )
+                    .await;
+            }
+            Some(UpdateOneof::Ping(_)) => {
+                subscribe_tx
+                    .send(SubscribeRequest {
+                        ping: Some(SubscribeRequestPing { id: 1 }),
+                        ..Default::default()
+                    })
+                    .await
+                    .context("respond to Yellowstone ping")?;
+            }
+            _ => {}
         }
     }
 }
