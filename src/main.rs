@@ -65,11 +65,12 @@ async fn main() -> Result<()> {
         "starting benchmark"
     );
 
-    let store = ObservationStore::new();
+    let (store, aggregator) = ObservationStore::channel();
+    let aggregation_handle = tokio::spawn(aggregator.run());
     let measuring = Arc::new(AtomicBool::new(false));
     let cancel = CancellationToken::new();
     let ctx = CollectorContext {
-        store: store.clone(),
+        store,
         measuring: Arc::clone(&measuring),
         cancel: cancel.clone(),
         buffer_size: config.buffer_size,
@@ -89,6 +90,8 @@ async fn main() -> Result<()> {
             _ = tokio::signal::ctrl_c() => {
                 warn!("interrupted during warmup; stopping without report");
                 shutdown_collectors(cancel, handles).await;
+                drop(ctx);
+                let _ = aggregation_handle.await;
                 return Ok(());
             }
         }
@@ -103,6 +106,8 @@ async fn main() -> Result<()> {
         _ = tokio::signal::ctrl_c() => {
             warn!("interrupted during measurement; stopping without report");
             shutdown_collectors(cancel, handles).await;
+            drop(ctx);
+            let _ = aggregation_handle.await;
             return Ok(());
         }
     }
@@ -110,7 +115,10 @@ async fn main() -> Result<()> {
     let finished_at = Utc::now();
     shutdown_collectors(cancel, handles).await;
 
-    let observations = store.snapshot().await;
+    drop(ctx);
+    let observations = aggregation_handle
+        .await
+        .context("observation aggregation task failed")?;
     let stats = stats::compute_stats(&endpoints, &observations);
     let meta = ReportMeta {
         generated_at: Utc::now(),

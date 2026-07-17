@@ -2,7 +2,6 @@ use super::CollectorContext;
 use crate::config::{Endpoint, Protocol};
 use crate::observation::{EndpointKey, Timing};
 use anyhow::{Context, Result};
-use chrono::Utc;
 use futures::{SinkExt, StreamExt};
 use solana_sdk::signature::Signature;
 use std::collections::HashMap;
@@ -96,7 +95,7 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
         let update = update?;
         match update.update_oneof {
             Some(UpdateOneof::Transaction(tx_update)) => {
-                let received_at = Utc::now();
+                let timing = Timing::now(None, None);
                 let Some(tx) = tx_update.transaction else {
                     warn!(
                         endpoint = endpoint.alias,
@@ -110,16 +109,7 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
                 last_tx = Instant::now();
                 debug!(endpoint = endpoint.alias, signature, "Yellowstone tx");
                 ctx.store
-                    .record(
-                        ctx.phase(),
-                        signature,
-                        endpoint_key.clone(),
-                        Timing {
-                            received_at,
-                            batch_received_at: None,
-                        },
-                    )
-                    .await;
+                    .record(ctx.phase(), signature, endpoint_key.clone(), timing);
             }
             Some(UpdateOneof::Ping(_)) => {
                 subscribe_tx

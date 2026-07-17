@@ -5,7 +5,6 @@ use crate::proto::arpc::{
     arpc_service_client::ArpcServiceClient, SubscribeRequest, SubscribeRequestFilterTransactions,
 };
 use anyhow::{Context, Result};
-use chrono::Utc;
 use futures::{channel::mpsc::unbounded, SinkExt};
 use solana_sdk::signature::Signature;
 use std::collections::HashMap;
@@ -95,7 +94,7 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
             }
             message = stream.message() => message,
         };
-        let received_at = Utc::now();
+        let timing = Timing::now(None, None);
         let Some(message) = message.context("receive aRPC message")? else {
             anyhow::bail!("server closed stream");
         };
@@ -114,15 +113,6 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
             .to_string();
         last_tx = Instant::now();
         ctx.store
-            .record(
-                ctx.phase(),
-                signature,
-                endpoint_key.clone(),
-                Timing {
-                    received_at,
-                    batch_received_at: None,
-                },
-            )
-            .await;
+            .record(ctx.phase(), signature, endpoint_key.clone(), timing);
     }
 }

@@ -20,6 +20,7 @@ url = "https://aperture-grpc.rpcfast.com:443"
 x_token_env = "APERTURE_X_TOKEN"
 signatures_only = true
 include_simulation = false
+batch_mode = false
 
 # Shreder Binary protocol. Add x_token_env when required by your endpoint.
 [shreder_binary.shreder_fra]

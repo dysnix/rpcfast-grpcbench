@@ -47,6 +47,7 @@ url = "https://aperture-grpc.rpcfast.com:443"
 x_token_env = "APERTURE_X_TOKEN"
 signatures_only = true
 include_simulation = false
+batch_mode = false
 
 [shreder_binary.fra]
 url = "http://fra.binary.shreder.xyz:9991"
@@ -60,6 +61,7 @@ url = "http://fra.jetstream.orbitflare.com"
 
 Endpoint table names become report aliases. Tokens can be supplied inline with `x_token`, but `x_token_env` is recommended.
 For Aperture endpoints, `include_simulation` requests transaction simulation results and defaults to `false`.
+For Aperture endpoints, `batch_mode` uses `SubscribeTransactionBatches` and defaults to `false`; the normal mode uses `SubscribeTransactions`.
 Shared Corvus aRPC endpoints are IP-allowlisted and do not need a token; dedicated endpoints can set `x_token` or `x_token_env`.
 OrbitFlare's public Jetstream endpoints normally use plain `http://`; use `https://` only for an endpoint that explicitly enables TLS.
 
@@ -72,8 +74,9 @@ OrbitFlare's public Jetstream endpoints normally use plain `http://`; use `https
 - `Pairwise winners`: one row per endpoint pair. `Wins` counts how often the displayed faster endpoint arrived first within shared signatures.
 - `Pairwise lead`: signed receive-time delta for the displayed faster endpoint. Positive values mean it led; negative values mean it was behind for that sample.
 - `Pairwise lag`: positive receive-time lag for samples where the displayed faster endpoint was behind. `n/a` means it never lost that pair.
+- `Batch-position analysis`: signed lead grouped by the zero-based transaction position in a ShredStream or txstream batch. Positive values mean the batch endpoint led its comparison endpoint.
 
-All endpoints are measured by timestamp of receive event. Provider timestamps such as `created_at` are intentionally ignored.
+Collectors capture a monotonic receive timestamp and enqueue each observation without awaiting aggregation. Pairwise differences use those monotonic timestamps; wall-clock time is retained only for report bounds. For Aperture txstream, only the primary (first) transaction signature is recorded. Provider timestamps such as `created_at` are intentionally ignored.
 
 ## License
 

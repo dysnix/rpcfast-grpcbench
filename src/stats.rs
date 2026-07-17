@@ -3,11 +3,13 @@ use crate::observation::{EndpointKey, TxObservation};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
+use std::time::Instant;
 
 #[derive(Debug, Serialize)]
 pub struct BenchmarkStats {
     pub endpoint_summaries: Vec<EndpointSummary>,
     pub pairwise: Vec<PairwiseSummary>,
+    pub batch_positions: Vec<BatchPositionSummary>,
     pub total_unique_signatures: usize,
     pub race_eligible_signatures: usize,
     pub full_coverage_signatures: usize,
@@ -49,6 +51,21 @@ pub struct PairwiseSummary {
     pub p95_behind_us: Option<i64>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct BatchPositionSummary {
+    pub batch_endpoint_alias: String,
+    pub batch_endpoint_protocol: String,
+    pub compared_alias: String,
+    pub compared_protocol: String,
+    pub batch_position: usize,
+    pub shared_signatures: u64,
+    pub wins: u64,
+    pub win_pct: f64,
+    /// Signed lead of the batch endpoint; positive means it arrived first.
+    pub median_lead_us: Option<i64>,
+    pub p95_lead_us: Option<i64>,
+}
+
 #[derive(Default)]
 struct EndpointAccumulator {
     summary: EndpointSummary,
@@ -62,6 +79,13 @@ struct PairAccumulator {
     left_wins: u64,
     right_wins: u64,
     left_lead_us: Vec<i64>,
+}
+
+#[derive(Default)]
+struct BatchPositionAccumulator {
+    shared: u64,
+    wins: u64,
+    lead_us: Vec<i64>,
 }
 
 pub fn compute_stats(
@@ -86,6 +110,8 @@ pub fn compute_stats(
     }
 
     let mut pair_acc = BTreeMap::<(EndpointKey, EndpointKey), PairAccumulator>::new();
+    let mut batch_position_acc =
+        BTreeMap::<(EndpointKey, EndpointKey, usize), BatchPositionAccumulator>::new();
     let mut race_eligible = 0usize;
     let mut full_coverage = 0usize;
 
@@ -94,15 +120,13 @@ pub fn compute_stats(
             let acc = endpoint_acc.entry(endpoint.clone()).or_default();
             acc.summary.unique_signatures += 1;
             acc.summary.repeated_signatures += timing.duplicates;
-            acc.summary.first_seen = min_opt(acc.summary.first_seen, timing.first.received_at);
-            acc.summary.last_seen = max_opt(acc.summary.last_seen, timing.first.received_at);
+            acc.summary.first_seen = min_opt(acc.summary.first_seen, timing.first.received_at_utc);
+            acc.summary.last_seen = max_opt(acc.summary.last_seen, timing.first.received_at_utc);
 
             if let Some(batch_received_at) = timing.first.batch_received_at {
-                acc.decode_latency_us.push(duration_us(
-                    timing
-                        .first
-                        .received_at
-                        .signed_duration_since(batch_received_at),
+                acc.decode_latency_us.push(signed_duration_us(
+                    timing.first.received_at,
+                    batch_received_at,
                 ));
             }
         }
@@ -131,9 +155,8 @@ pub fn compute_stats(
         for (endpoint, timing) in &sightings {
             if let Some(acc) = endpoint_acc.get_mut(endpoint) {
                 acc.summary.seen_in_races += 1;
-                acc.lag_us.push(duration_us(
-                    timing.first.received_at.signed_duration_since(winner_time),
-                ));
+                acc.lag_us
+                    .push(signed_duration_us(timing.first.received_at, winner_time));
             }
         }
 
@@ -146,13 +169,8 @@ pub fn compute_stats(
                 } else {
                     (second, first)
                 };
-                let left_lead_us = duration_us(
-                    right
-                        .1
-                        .first
-                        .received_at
-                        .signed_duration_since(left.1.first.received_at),
-                );
+                let left_lead_us =
+                    signed_duration_us(right.1.first.received_at, left.1.first.received_at);
                 let pair = pair_acc
                     .entry((left.0.clone(), right.0.clone()))
                     .or_default();
@@ -163,6 +181,33 @@ pub fn compute_stats(
                     pair.right_wins += 1;
                 }
                 pair.left_lead_us.push(left_lead_us);
+            }
+        }
+
+        for (batch_endpoint, batch_observation) in &obs.endpoints {
+            let Some(batch_position) = batch_observation.first.batch_position else {
+                continue;
+            };
+            for (compared_endpoint, compared_observation) in &obs.endpoints {
+                if batch_endpoint == compared_endpoint {
+                    continue;
+                }
+                let lead_us = signed_duration_us(
+                    compared_observation.first.received_at,
+                    batch_observation.first.received_at,
+                );
+                let acc = batch_position_acc
+                    .entry((
+                        batch_endpoint.clone(),
+                        compared_endpoint.clone(),
+                        batch_position,
+                    ))
+                    .or_default();
+                acc.shared += 1;
+                if lead_us > 0 {
+                    acc.wins += 1;
+                }
+                acc.lead_us.push(lead_us);
             }
         }
     }
@@ -218,9 +263,33 @@ pub fn compute_stats(
             .then_with(|| a.slower_alias.cmp(&b.slower_alias))
     });
 
+    let mut batch_positions = Vec::new();
+    for ((batch_endpoint, compared_endpoint, batch_position), mut acc) in batch_position_acc {
+        acc.lead_us.sort_unstable();
+        batch_positions.push(BatchPositionSummary {
+            batch_endpoint_alias: batch_endpoint.alias,
+            batch_endpoint_protocol: batch_endpoint.protocol,
+            compared_alias: compared_endpoint.alias,
+            compared_protocol: compared_endpoint.protocol,
+            batch_position,
+            shared_signatures: acc.shared,
+            wins: acc.wins,
+            win_pct: pct(acc.wins, acc.shared),
+            median_lead_us: percentile_sorted(&acc.lead_us, 0.50),
+            p95_lead_us: percentile_sorted(&acc.lead_us, 0.95),
+        });
+    }
+    batch_positions.sort_by(|a, b| {
+        a.batch_endpoint_alias
+            .cmp(&b.batch_endpoint_alias)
+            .then_with(|| a.compared_alias.cmp(&b.compared_alias))
+            .then_with(|| a.batch_position.cmp(&b.batch_position))
+    });
+
     BenchmarkStats {
         endpoint_summaries,
         pairwise,
+        batch_positions,
         total_unique_signatures: observations.len(),
         race_eligible_signatures: race_eligible,
         full_coverage_signatures: full_coverage,
@@ -228,8 +297,18 @@ pub fn compute_stats(
     }
 }
 
-fn duration_us(duration: chrono::Duration) -> i64 {
-    duration.num_microseconds().unwrap_or(i64::MAX)
+fn signed_duration_us(later: Instant, earlier: Instant) -> i64 {
+    let (negative, duration) = if later >= earlier {
+        (false, later.duration_since(earlier))
+    } else {
+        (true, earlier.duration_since(later))
+    };
+    let micros = i64::try_from(duration.as_micros()).unwrap_or(i64::MAX);
+    if negative {
+        -micros
+    } else {
+        micros
+    }
 }
 
 fn pct(value: u64, total: u64) -> f64 {
@@ -268,7 +347,8 @@ mod tests {
             endpoint("ys", Protocol::Yellowstone),
             endpoint("ap", Protocol::ApertureTxstream),
         ];
-        let t0 = Utc::now();
+        let t0 = Instant::now();
+        let wall_time = Utc::now();
         let mut observations = HashMap::new();
         observations.insert(
             "sig".to_string(),
@@ -277,14 +357,17 @@ mod tests {
                     (
                         EndpointKey::new(Protocol::Yellowstone, "ys"),
                         EndpointObservation {
-                            first: timing(t0),
+                            first: timing(t0, wall_time),
                             duplicates: 0,
                         },
                     ),
                     (
                         EndpointKey::new(Protocol::ApertureTxstream, "ap"),
                         EndpointObservation {
-                            first: timing(t0 + chrono::Duration::microseconds(500)),
+                            first: timing(
+                                t0 + std::time::Duration::from_micros(500),
+                                wall_time + chrono::Duration::microseconds(500),
+                            ),
                             duplicates: 1,
                         },
                     ),
@@ -307,7 +390,7 @@ mod tests {
             endpoint("ys", Protocol::Yellowstone),
             endpoint("ap", Protocol::ApertureTxstream),
         ];
-        let t0 = Utc::now();
+        let t0 = Instant::now();
         let mut observations = HashMap::new();
         observations.insert(
             "sig-ys-wins-1".to_string(),
@@ -316,7 +399,7 @@ mod tests {
                 (
                     Protocol::ApertureTxstream,
                     "ap",
-                    t0 + chrono::Duration::microseconds(500),
+                    t0 + std::time::Duration::from_micros(500),
                 ),
             ]),
         );
@@ -326,12 +409,12 @@ mod tests {
                 (
                     Protocol::Yellowstone,
                     "ys",
-                    t0 + chrono::Duration::microseconds(100),
+                    t0 + std::time::Duration::from_micros(100),
                 ),
                 (
                     Protocol::ApertureTxstream,
                     "ap",
-                    t0 + chrono::Duration::microseconds(300),
+                    t0 + std::time::Duration::from_micros(300),
                 ),
             ]),
         );
@@ -341,12 +424,12 @@ mod tests {
                 (
                     Protocol::Yellowstone,
                     "ys",
-                    t0 + chrono::Duration::microseconds(200),
+                    t0 + std::time::Duration::from_micros(200),
                 ),
                 (
                     Protocol::ApertureTxstream,
                     "ap",
-                    t0 + chrono::Duration::microseconds(100),
+                    t0 + std::time::Duration::from_micros(100),
                 ),
             ]),
         );
@@ -366,6 +449,84 @@ mod tests {
         assert_eq!(pair.p95_behind_us, Some(100));
     }
 
+    #[test]
+    fn batch_position_breakdown_preserves_position_and_signed_lead() {
+        let endpoints = vec![
+            endpoint("shred", Protocol::JitoShredstream),
+            endpoint("ys", Protocol::Yellowstone),
+        ];
+        let t0 = Instant::now();
+        let wall_time = Utc::now();
+        let shred_key = EndpointKey::new(Protocol::JitoShredstream, "shred");
+        let ys_key = EndpointKey::new(Protocol::Yellowstone, "ys");
+        let observations = HashMap::from([
+            (
+                "position-zero".to_string(),
+                TxObservation {
+                    endpoints: HashMap::from([
+                        (
+                            shred_key.clone(),
+                            EndpointObservation {
+                                first: Timing {
+                                    batch_position: Some(0),
+                                    ..timing(t0, wall_time)
+                                },
+                                duplicates: 0,
+                            },
+                        ),
+                        (
+                            ys_key.clone(),
+                            EndpointObservation {
+                                first: timing(
+                                    t0 + std::time::Duration::from_micros(300),
+                                    wall_time,
+                                ),
+                                duplicates: 0,
+                            },
+                        ),
+                    ]),
+                },
+            ),
+            (
+                "position-one".to_string(),
+                TxObservation {
+                    endpoints: HashMap::from([
+                        (
+                            shred_key,
+                            EndpointObservation {
+                                first: Timing {
+                                    batch_position: Some(1),
+                                    ..timing(t0 + std::time::Duration::from_micros(500), wall_time)
+                                },
+                                duplicates: 0,
+                            },
+                        ),
+                        (
+                            ys_key,
+                            EndpointObservation {
+                                first: timing(
+                                    t0 + std::time::Duration::from_micros(200),
+                                    wall_time,
+                                ),
+                                duplicates: 0,
+                            },
+                        ),
+                    ]),
+                },
+            ),
+        ]);
+
+        let stats = compute_stats(&endpoints, &observations);
+
+        assert_eq!(stats.batch_positions.len(), 2);
+        assert_eq!(stats.batch_positions[0].batch_position, 0);
+        assert_eq!(stats.batch_positions[0].median_lead_us, Some(300));
+        assert_eq!(stats.batch_positions[0].wins, 1);
+        assert_eq!(stats.batch_positions[1].batch_position, 1);
+        assert_eq!(stats.batch_positions[1].median_lead_us, Some(-300));
+        assert_eq!(stats.batch_positions[1].wins, 0);
+    }
+
     fn endpoint(alias: &str, protocol: Protocol) -> Endpoint {
         Endpoint {
             alias: alias.to_string(),
@@ -374,19 +535,23 @@ mod tests {
             token: String::new(),
             signatures_only: true,
             include_simulation: false,
+            batch_mode: false,
         }
     }
 
-    fn timing(received_at: DateTime<Utc>) -> Timing {
+    fn timing(received_at: Instant, received_at_utc: DateTime<Utc>) -> Timing {
         Timing {
             received_at,
+            received_at_utc,
             batch_received_at: None,
+            batch_position: None,
         }
     }
 
     fn tx_observation<const N: usize>(
-        entries: [(Protocol, &'static str, DateTime<Utc>); N],
+        entries: [(Protocol, &'static str, Instant); N],
     ) -> TxObservation {
+        let wall_time = Utc::now();
         TxObservation {
             endpoints: entries
                 .into_iter()
@@ -394,7 +559,7 @@ mod tests {
                     (
                         EndpointKey::new(protocol, alias),
                         EndpointObservation {
-                            first: timing(received_at),
+                            first: timing(received_at, wall_time),
                             duplicates: 0,
                         },
                     )

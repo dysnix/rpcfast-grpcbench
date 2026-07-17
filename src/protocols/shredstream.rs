@@ -5,7 +5,6 @@ use crate::proto::shredstream::{
     shredstream_proxy_client::ShredstreamProxyClient, SubscribeEntriesRequest,
 };
 use anyhow::{Context, Result};
-use chrono::Utc;
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -84,7 +83,7 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
             message = stream.message() => message,
         };
 
-        let batch_received_at = Utc::now();
+        let batch_received_at = Instant::now();
         let Some(entry_batch) = message.context("receive ShredStream message")? else {
             anyhow::bail!("server closed stream");
         };
@@ -101,8 +100,11 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
                 }
             };
 
+        let mut batch_position = 0usize;
         for entry in entries {
             for transaction in entry.transactions {
+                let transaction_position = batch_position;
+                batch_position += 1;
                 if let Some(filter) = &account_filter {
                     let matched = transaction
                         .message
@@ -118,17 +120,12 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
                     continue;
                 };
                 last_tx = Instant::now();
-                ctx.store
-                    .record(
-                        ctx.phase(),
-                        signature.to_string(),
-                        endpoint_key.clone(),
-                        Timing {
-                            received_at: Utc::now(),
-                            batch_received_at: Some(batch_received_at),
-                        },
-                    )
-                    .await;
+                ctx.store.record(
+                    ctx.phase(),
+                    signature.to_string(),
+                    endpoint_key.clone(),
+                    Timing::now(Some(batch_received_at), Some(transaction_position)),
+                );
             }
         }
     }

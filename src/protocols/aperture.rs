@@ -3,9 +3,8 @@ use crate::config::{Endpoint, Protocol};
 use crate::observation::{EndpointKey, Timing};
 use anyhow::{Context, Result};
 use aperture_grpc_client::{
-    ApertureClientConfig, ApertureGrpcClient, SubscribeFilters, VoteFilter,
+    ApertureClientConfig, ApertureGrpcClient, DecodedTransaction, SubscribeFilters, VoteFilter,
 };
-use chrono::Utc;
 use futures::StreamExt;
 use solana_sdk::{pubkey::Pubkey, signature::Signature};
 use std::str::FromStr;
@@ -44,14 +43,34 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
         endpoint.signatures_only,
         endpoint.include_simulation,
     )?;
-    let mut stream = Box::pin(client.subscribe_with_reconnect(filters));
     info!(
         endpoint = endpoint.alias,
         url = endpoint.url,
+        batch_mode = endpoint.batch_mode,
         "Aperture txstream collector started"
     );
 
     let endpoint_key = EndpointKey::new(Protocol::ApertureTxstream, endpoint.alias.clone());
+    if endpoint.batch_mode {
+        let stream = client.subscribe_batches_with_reconnect(filters);
+        collect_batches(endpoint, ctx, endpoint_key, Box::pin(stream)).await
+    } else {
+        let stream = client.subscribe_with_reconnect(filters);
+        collect_transactions(endpoint, ctx, endpoint_key, Box::pin(stream)).await
+    }
+}
+
+async fn collect_transactions<S>(
+    endpoint: &Endpoint,
+    ctx: &CollectorContext,
+    endpoint_key: EndpointKey,
+    mut stream: std::pin::Pin<Box<S>>,
+) -> Result<()>
+where
+    S: futures::Stream<
+            Item = Result<DecodedTransaction, aperture_grpc_client::ApertureGrpcClientError>,
+        > + ?Sized,
+{
     let mut last_tx = Instant::now();
 
     loop {
@@ -70,37 +89,93 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
         let Some(transaction) = next else {
             anyhow::bail!("server closed stream");
         };
-        let received_at = Utc::now();
         let tx = transaction.context("receive Aperture transaction")?;
-
-        if tx.signatures.is_empty() {
-            warn!(
-                endpoint = endpoint.alias,
-                slot = tx.slot,
-                index = tx.index,
-                "Aperture tx had no signatures"
-            );
-            continue;
-        }
-
-        last_tx = Instant::now();
-        for signature_bytes in tx.signatures {
-            let signature = Signature::try_from(signature_bytes.as_slice())
-                .context("decode Aperture signature")?
-                .to_string();
-            ctx.store
-                .record(
-                    ctx.phase(),
-                    signature,
-                    endpoint_key.clone(),
-                    Timing {
-                        received_at,
-                        batch_received_at: None,
-                    },
-                )
-                .await;
+        if record_transaction(endpoint, ctx, &endpoint_key, tx, Timing::now(None, None))? {
+            last_tx = Instant::now();
         }
     }
+}
+
+async fn collect_batches<S>(
+    endpoint: &Endpoint,
+    ctx: &CollectorContext,
+    endpoint_key: EndpointKey,
+    mut stream: std::pin::Pin<Box<S>>,
+) -> Result<()>
+where
+    S: futures::Stream<
+            Item = Result<
+                aperture_grpc_client::DecodedTransactionBatch,
+                aperture_grpc_client::ApertureGrpcClientError,
+            >,
+        > + ?Sized,
+{
+    let mut last_tx = Instant::now();
+
+    loop {
+        let next = tokio::select! {
+            biased;
+            _ = ctx.cancel.cancelled() => return Ok(()),
+            _ = tokio::time::sleep(ctx.no_tx_timeout) => {
+                if last_tx.elapsed() >= ctx.no_tx_timeout {
+                    anyhow::bail!("no transactions for {:?}", ctx.no_tx_timeout);
+                }
+                continue;
+            }
+            next = stream.next() => next,
+        };
+
+        let batch_received_at = Instant::now();
+        let Some(batch) = next else {
+            anyhow::bail!("server closed stream");
+        };
+        let batch = batch.context("receive Aperture transaction batch")?;
+        for (batch_position, tx) in batch.transactions.into_iter().enumerate() {
+            if record_transaction(
+                endpoint,
+                ctx,
+                &endpoint_key,
+                tx,
+                Timing::now(Some(batch_received_at), Some(batch_position)),
+            )? {
+                last_tx = Instant::now();
+            }
+        }
+    }
+}
+
+fn record_transaction(
+    endpoint: &Endpoint,
+    ctx: &CollectorContext,
+    endpoint_key: &EndpointKey,
+    tx: DecodedTransaction,
+    timing: Timing,
+) -> Result<bool> {
+    let Some(signature) = primary_signature(&tx)? else {
+        warn!(
+            endpoint = endpoint.alias,
+            slot = tx.slot,
+            index = tx.index,
+            "Aperture tx had no signatures"
+        );
+        return Ok(false);
+    };
+
+    ctx.store
+        .record(ctx.phase(), signature, endpoint_key.clone(), timing);
+    Ok(true)
+}
+
+fn primary_signature(tx: &DecodedTransaction) -> Result<Option<String>> {
+    // A Solana transaction is identified by its primary (first) signature.
+    tx.signatures
+        .first()
+        .map(|signature_bytes| {
+            Signature::try_from(signature_bytes.as_slice())
+                .context("decode Aperture primary signature")
+                .map(|signature| signature.to_string())
+        })
+        .transpose()
 }
 
 fn client_config(endpoint: &Endpoint, buffer_size: usize) -> ApertureClientConfig {
@@ -138,12 +213,29 @@ fn subscribe_filters(
 
 #[cfg(test)]
 mod tests {
-    use super::subscribe_filters;
+    use super::{primary_signature, subscribe_filters};
+    use aperture_grpc_client::DecodedTransaction;
+    use solana_sdk::signature::Signature;
 
     #[test]
     fn subscribe_filters_forward_include_simulation() {
         let filters = subscribe_filters(&[], true, true).expect("build filters");
         assert!(filters.signatures_only);
         assert!(filters.include_simulation);
+    }
+
+    #[test]
+    fn only_primary_signature_is_selected() {
+        let primary = Signature::from([1_u8; 64]);
+        let secondary = Signature::from([2_u8; 64]);
+        let tx = DecodedTransaction {
+            signatures: vec![primary.as_ref().to_vec(), secondary.as_ref().to_vec()],
+            ..DecodedTransaction::default()
+        };
+
+        assert_eq!(
+            primary_signature(&tx).expect("decode signature"),
+            Some(primary.to_string())
+        );
     }
 }

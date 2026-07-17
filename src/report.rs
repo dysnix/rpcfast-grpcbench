@@ -81,6 +81,27 @@ pub fn render_report(meta: &ReportMeta, endpoints: &[Endpoint], stats: &Benchmar
     }
     html.push_str("</tbody></table></div></section>");
 
+    if !stats.batch_positions.is_empty() {
+        html.push_str("<section><h2>Batch-position analysis</h2><div class=\"table-wrap\"><table>");
+        html.push_str("<thead><tr><th>Batch endpoint</th><th>Compared endpoint</th><th>Position (zero-based)</th><th>Shared txs</th><th>Wins</th><th>Win rate</th><th>Median lead</th><th>p95 lead</th></tr></thead><tbody>");
+        for position in &stats.batch_positions {
+            write!(
+                html,
+                "<tr><td><strong>{}</strong></td><td><strong>{}</strong></td><td>{}</td><td>{}</td><td>{}</td><td>{:.1}%</td><td>{}</td><td>{}</td></tr>",
+                escape(&position.batch_endpoint_alias),
+                escape(&position.compared_alias),
+                position.batch_position,
+                position.shared_signatures,
+                position.wins,
+                position.win_pct,
+                fmt_us(position.median_lead_us),
+                fmt_us(position.p95_lead_us),
+            )
+            .ok();
+        }
+        html.push_str("</tbody></table></div></section>");
+    }
+
     html.push_str("<section><h2>Configured streams</h2><div class=\"endpoint-grid\">");
     for endpoint in endpoints {
         write!(
@@ -711,6 +732,7 @@ mod tests {
         let stats = BenchmarkStats {
             endpoint_summaries: Vec::new(),
             pairwise: Vec::new(),
+            batch_positions: Vec::new(),
             total_unique_signatures: 0,
             race_eligible_signatures: 0,
             full_coverage_signatures: 0,
@@ -751,6 +773,7 @@ mod tests {
                 median_behind_us: Some(2),
                 p95_behind_us: Some(2),
             }],
+            batch_positions: Vec::new(),
             total_unique_signatures: 0,
             race_eligible_signatures: 0,
             full_coverage_signatures: 0,
@@ -774,6 +797,7 @@ mod tests {
             token: String::new(),
             signatures_only: true,
             include_simulation: false,
+            batch_mode: false,
         }];
         let streams = streams_table_layout(&endpoints, 180);
         assert_eq!(streams.alias_width, "rpcfast_shredstream".len());

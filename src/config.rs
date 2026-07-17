@@ -47,6 +47,7 @@ pub struct Endpoint {
     pub token: String,
     pub signatures_only: bool,
     pub include_simulation: bool,
+    pub batch_mode: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,6 +96,8 @@ pub struct ApertureEndpointConfig {
     pub signatures_only: bool,
     #[serde(default)]
     pub include_simulation: bool,
+    #[serde(default)]
+    pub batch_mode: bool,
 }
 
 fn default_no_tx_timeout() -> Duration {
@@ -130,6 +133,7 @@ impl Config {
                 token: resolve_token(entry.x_token.as_deref(), entry.x_token_env.as_deref())?,
                 signatures_only: true,
                 include_simulation: false,
+                batch_mode: false,
             });
         }
 
@@ -141,6 +145,7 @@ impl Config {
                 token: resolve_token(entry.x_token.as_deref(), entry.x_token_env.as_deref())?,
                 signatures_only: true,
                 include_simulation: false,
+                batch_mode: false,
             });
         }
 
@@ -152,6 +157,7 @@ impl Config {
                 token: resolve_token(entry.x_token.as_deref(), entry.x_token_env.as_deref())?,
                 signatures_only: entry.signatures_only,
                 include_simulation: entry.include_simulation,
+                batch_mode: entry.batch_mode,
             });
         }
 
@@ -192,6 +198,7 @@ fn generic_endpoint(alias: &str, entry: &EndpointConfig, protocol: Protocol) -> 
         token: resolve_token(entry.x_token.as_deref(), entry.x_token_env.as_deref())?,
         signatures_only: true,
         include_simulation: false,
+        batch_mode: false,
     })
 }
 
@@ -212,7 +219,7 @@ mod tests {
     use super::{Config, Protocol};
 
     #[test]
-    fn aperture_include_simulation_defaults_to_false_and_can_be_enabled() {
+    fn aperture_optional_flags_default_to_false_and_can_be_enabled() {
         let config: Config = toml::from_str(
             r#"
                 [aperture_txstream.default]
@@ -221,13 +228,16 @@ mod tests {
                 [aperture_txstream.simulated]
                 url = "https://simulated.example.com"
                 include_simulation = true
+                batch_mode = true
             "#,
         )
         .expect("parse config");
 
         let endpoints = config.endpoints().expect("resolve endpoints");
         assert!(!endpoints[0].include_simulation);
+        assert!(!endpoints[0].batch_mode);
         assert!(endpoints[1].include_simulation);
+        assert!(endpoints[1].batch_mode);
     }
 
     #[test]
