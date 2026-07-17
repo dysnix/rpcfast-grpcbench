@@ -82,7 +82,7 @@ pub fn render_report(meta: &ReportMeta, endpoints: &[Endpoint], stats: &Benchmar
     html.push_str("</tbody></table></div></section>");
 
     if !stats.batch_positions.is_empty() {
-        html.push_str("<section><h2>Batch-position analysis</h2><div class=\"table-wrap\"><table>");
+        html.push_str("<section><h2>Batch-position analysis</h2><details><summary>Open batch-position analysis</summary><div class=\"table-wrap details-table\"><table>");
         html.push_str("<thead><tr><th>Batch endpoint</th><th>Compared endpoint</th><th>Position (zero-based)</th><th>Shared txs</th><th>Wins</th><th>Win rate</th><th>Median lead</th><th>p95 lead</th></tr></thead><tbody>");
         for position in &stats.batch_positions {
             write!(
@@ -99,7 +99,7 @@ pub fn render_report(meta: &ReportMeta, endpoints: &[Endpoint], stats: &Benchmar
             )
             .ok();
         }
-        html.push_str("</tbody></table></div></section>");
+        html.push_str("</tbody></table></div></details></section>");
     }
 
     html.push_str("<section><h2>Configured streams</h2><div class=\"endpoint-grid\">");
@@ -704,7 +704,7 @@ const STYLE: &str = r#"
 .table-wrap{overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:8px}table{width:100%;border-collapse:collapse;min-width:880px}th,td{padding:11px 12px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}th{background:var(--panel2);color:var(--peach);font-size:12px;text-transform:uppercase;letter-spacing:.04em}tr:last-child td{border-bottom:0}td small{display:block;color:var(--blue);margin-top:2px}
 .endpoint-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}.endpoint{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;min-width:0}.endpoint span{display:block;color:var(--blue);font-weight:700;margin:3px 0}.endpoint code{display:block;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:12px}
 .filter-box{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px}.filter-box span{display:block;color:var(--peach);font-size:12px;text-transform:uppercase;letter-spacing:.04em}.filter-box strong{display:block;margin-top:4px}.filter-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}.filter-list code{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 8px;color:var(--violet);font-size:12px}
-.notes{background:#201915;border:1px solid #5b3828;border-radius:8px;padding:16px;margin-top:30px}.notes h2{margin-top:0;color:var(--coral-hover)}.notes p{margin:8px 0;color:var(--peach)}details{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}summary{cursor:pointer;color:var(--coral-hover);font-weight:800}pre{overflow:auto;max-height:520px;font-size:12px;color:var(--seashell)}
+.notes{background:#201915;border:1px solid #5b3828;border-radius:8px;padding:16px;margin-top:30px}.notes h2{margin-top:0;color:var(--coral-hover)}.notes p{margin:8px 0;color:var(--peach)}details{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}summary{cursor:pointer;color:var(--coral-hover);font-weight:800}.details-table{margin-top:12px}pre{overflow:auto;max-height:520px;font-size:12px;color:var(--seashell)}
 @media(max-width:760px){.hero{display:block}.stamp{text-align:left;margin-top:18px}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}h1{font-size:34px}.shell{padding:22px 14px 36px}}
 </style>
 "#;
@@ -716,6 +716,45 @@ mod tests {
     #[test]
     fn html_escape_covers_basic_entities() {
         assert_eq!(escape("<a&b>\"'"), "&lt;a&amp;b&gt;&quot;&#39;");
+    }
+
+    #[test]
+    fn batch_position_analysis_is_collapsed_by_default() {
+        let now = Utc::now();
+        let meta = ReportMeta {
+            generated_at: now,
+            started_at: now,
+            finished_at: now,
+            duration_secs: 1,
+            warmup_secs: 0,
+            endpoint_count: 0,
+            account_include: Vec::new(),
+        };
+        let stats = BenchmarkStats {
+            endpoint_summaries: Vec::new(),
+            pairwise: Vec::new(),
+            batch_positions: vec![crate::stats::BatchPositionSummary {
+                batch_endpoint_alias: "batch".to_string(),
+                batch_endpoint_protocol: "aperture-txstream".to_string(),
+                compared_alias: "other".to_string(),
+                compared_protocol: "yellowstone".to_string(),
+                batch_position: 0,
+                shared_signatures: 1,
+                wins: 1,
+                win_pct: 100.0,
+                median_lead_us: Some(10),
+                p95_lead_us: Some(10),
+            }],
+            total_unique_signatures: 1,
+            race_eligible_signatures: 1,
+            full_coverage_signatures: 1,
+            configured_endpoint_count: 0,
+        };
+
+        let html = render_report(&meta, &[], &stats);
+
+        assert!(html.contains("<details><summary>Open batch-position analysis</summary>"));
+        assert!(!html.contains("<details open>"));
     }
 
     #[test]
