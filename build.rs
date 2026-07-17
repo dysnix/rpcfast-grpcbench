@@ -9,8 +9,14 @@ fn main() {
         .build_client(true)
         .build_server(false)
         .compile_protos(
-            &["protos/shared.proto", "protos/shredstream.proto"],
+            &[
+                "protos/shared.proto",
+                "protos/shredstream.proto",
+                "protos/shreder-binary.proto",
+                "protos/arpc.proto",
+                "protos/jetstream.proto",
+            ],
             &["protos"],
         )
-        .expect("compile ShredStream protobufs");
+        .expect("compile stream protocol protobufs");
 }

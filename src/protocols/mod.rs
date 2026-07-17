@@ -8,6 +8,10 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 pub mod aperture;
+pub mod arpc;
+mod grpc;
+pub mod jetstream;
+pub mod shreder_binary;
 pub mod shredstream;
 pub mod yellowstone;
 
@@ -37,6 +41,9 @@ pub fn spawn_endpoint(endpoint: Endpoint, ctx: CollectorContext) -> tokio::task:
             Protocol::Yellowstone => yellowstone::run(endpoint, ctx).await,
             Protocol::JitoShredstream => shredstream::run(endpoint, ctx).await,
             Protocol::ApertureTxstream => aperture::run(endpoint, ctx).await,
+            Protocol::ShrederBinary => shreder_binary::run(endpoint, ctx).await,
+            Protocol::Arpc => arpc::run(endpoint, ctx).await,
+            Protocol::Jetstream => jetstream::run(endpoint, ctx).await,
         }
     })
 }

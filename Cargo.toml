@@ -2,7 +2,7 @@
 name = "rpcfast-grpcbench"
 version = "0.1.1"
 edition = "2021"
-description = "Compare Solana gRPC stream speed across Yellowstone, Jito ShredStream, and Aperture txstream."
+description = "Compare Solana transaction stream delivery speed across multiple protocols and providers."
 license = "Apache-2.0"
 
 [dependencies]

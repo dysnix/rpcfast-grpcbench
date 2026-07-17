@@ -5,6 +5,9 @@
 - Yellowstone gRPC
 - Jito ShredStream `SubscribeEntries`
 - Aperture txstream
+- Shreder Binary
+- Corvus aRPC v1
+- OrbitFlare Jetstream
 
 It records local receive timestamps for transaction signatures, compares only signatures seen by at least two endpoints, and writes a self-contained HTML report. It does not call RPC or use block time.
 
@@ -15,6 +18,9 @@ cp grpcbench.example.toml grpcbench.toml
 export YELLOWSTONE_X_TOKEN=...
 export JITO_SHREDSTREAM_X_TOKEN=...
 export APERTURE_X_TOKEN=...
+export SHREDER_BINARY_X_TOKEN=... # only when the endpoint requires it
+export ARPC_X_TOKEN=...           # dedicated Corvus endpoints only
+export JETSTREAM_X_TOKEN=...      # only when the endpoint requires it
 cargo run --release -- --config grpcbench.toml --duration 60s --output report.html
 ```
 
@@ -41,10 +47,21 @@ url = "https://aperture-grpc.rpcfast.com:443"
 x_token_env = "APERTURE_X_TOKEN"
 signatures_only = true
 include_simulation = false
+
+[shreder_binary.fra]
+url = "http://fra.binary.shreder.xyz:9991"
+
+[arpc.corvus_fra]
+url = "http://arpc.fra.corvus-labs.io:20202"
+
+[jetstream.orbitflare_fra]
+url = "http://fra.jetstream.orbitflare.com"
 ```
 
 Endpoint table names become report aliases. Tokens can be supplied inline with `x_token`, but `x_token_env` is recommended.
 For Aperture endpoints, `include_simulation` requests transaction simulation results and defaults to `false`.
+Shared Corvus aRPC endpoints are IP-allowlisted and do not need a token; dedicated endpoints can set `x_token` or `x_token_env`.
+OrbitFlare's public Jetstream endpoints normally use plain `http://`; use `https://` only for an endpoint that explicitly enables TLS.
 
 ## Report Semantics
 
@@ -56,7 +73,7 @@ For Aperture endpoints, `include_simulation` requests transaction simulation res
 - `Pairwise lead`: signed receive-time delta for the displayed faster endpoint. Positive values mean it led; negative values mean it was behind for that sample.
 - `Pairwise lag`: positive receive-time lag for samples where the displayed faster endpoint was behind. `n/a` means it never lost that pair.
 
-All endpoints are measured by timestamp of receive event.
+All endpoints are measured by timestamp of receive event. Provider timestamps such as `created_at` are intentionally ignored.
 
 ## License
 

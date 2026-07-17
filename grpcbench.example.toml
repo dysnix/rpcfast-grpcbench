@@ -20,3 +20,15 @@ url = "https://aperture-grpc.rpcfast.com:443"
 x_token_env = "APERTURE_X_TOKEN"
 signatures_only = true
 include_simulation = false
+
+# Shreder Binary protocol. Add x_token_env when required by your endpoint.
+[shreder_binary.shreder_fra]
+url = "http://fra.binary.shreder.xyz:9991"
+
+# Shared Corvus aRPC authenticates by IP allowlist. Dedicated endpoints can use x_token_env.
+[arpc.corvus_fra]
+url = "http://arpc.fra.corvus-labs.io:20202"
+
+# OrbitFlare's public Jetstream endpoints use plaintext HTTP/2.
+[jetstream.orbitflare_fra]
+url = "http://fra.jetstream.orbitflare.com"

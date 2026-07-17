@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package jetstream;
+
+service Jetstream {
+  rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeUpdate);
+}
+
+message SubscribeRequest {
+  map<string, SubscribeRequestFilterTransactions> transactions = 1;
+  map<string, SubscribeRequestFilterAccounts> accounts = 2;
+  optional SubscribeRequestPing ping = 4;
+}
+
+message SubscribeRequestFilterTransactions {
+  repeated string account_include = 1;
+  repeated string account_exclude = 2;
+  repeated string account_required = 3;
+}
+
+message SubscribeRequestFilterAccounts {}
+
+message SubscribeRequestPing {
+  int32 id = 1;
+}
+
+message SubscribeUpdate {
+  repeated string filters = 1;
+  oneof update_oneof {
+    SubscribeUpdateTransaction transaction = 3;
+    SubscribeUpdatePing ping = 5;
+    SubscribeUpdatePong pong = 6;
+  }
+}
+
+message SubscribeUpdateTransaction {
+  SubscribeUpdateTransactionInfo transaction = 1;
+  uint64 slot = 2;
+}
+
+message SubscribeUpdateTransactionInfo {
+  bytes signature = 1;
+  repeated bytes signatures = 7;
+  repeated bytes account_keys = 8;
+}
+
+message SubscribeUpdatePing {}
+
+message SubscribeUpdatePong {
+  int32 id = 1;
+}

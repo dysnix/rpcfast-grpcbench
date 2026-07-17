@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package arpc;
+
+service ARPCService {
+  rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeResponse);
+}
+
+message SubscribeRequest {
+  map<string, SubscribeRequestFilterTransactions> transactions = 1;
+  optional int32 ping_id = 2;
+}
+
+message SubscribeRequestFilterTransactions {
+  repeated string account_include = 2;
+  repeated string account_exclude = 3;
+  repeated string account_required = 4;
+}
+
+message SubscribeResponse {
+  repeated string filters = 2;
+  optional SubscribeResponseTransaction transaction = 3;
+}
+
+message SubscribeResponseTransaction {
+  repeated bytes signatures = 6;
+  repeated bytes account_keys = 7;
+}
