@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use aperture_grpc_client::{
     ApertureClientConfig, ApertureGrpcClient, DecodedTransaction, SubscribeFilters, VoteFilter,
 };
+use chrono::Utc;
 use futures::StreamExt;
 use solana_sdk::{pubkey::Pubkey, signature::Signature};
 use std::str::FromStr;
@@ -130,13 +131,22 @@ where
             anyhow::bail!("server closed stream");
         };
         let batch = batch.context("receive Aperture transaction batch")?;
+        // The gRPC stream yields a fully protobuf-decoded batch. Use one
+        // timestamp for every transaction that became usable together.
+        let batch_usable_at = Instant::now();
+        let batch_usable_at_utc = Utc::now();
         for (batch_position, tx) in batch.transactions.into_iter().enumerate() {
             if record_transaction(
                 endpoint,
                 ctx,
                 &endpoint_key,
                 tx,
-                Timing::now(Some(batch_received_at), Some(batch_position)),
+                Timing::at(
+                    batch_usable_at,
+                    batch_usable_at_utc,
+                    Some(batch_received_at),
+                    Some(batch_position),
+                ),
             )? {
                 last_tx = Instant::now();
             }

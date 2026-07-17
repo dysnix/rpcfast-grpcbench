@@ -35,9 +35,23 @@ pub struct Timing {
 
 impl Timing {
     pub fn now(batch_received_at: Option<Instant>, batch_position: Option<usize>) -> Self {
+        Self::at(
+            Instant::now(),
+            Utc::now(),
+            batch_received_at,
+            batch_position,
+        )
+    }
+
+    pub fn at(
+        received_at: Instant,
+        received_at_utc: DateTime<Utc>,
+        batch_received_at: Option<Instant>,
+        batch_position: Option<usize>,
+    ) -> Self {
         Self {
-            received_at: Instant::now(),
-            received_at_utc: Utc::now(),
+            received_at,
+            received_at_utc,
             batch_received_at,
             batch_position,
         }
@@ -188,5 +202,22 @@ mod tests {
         drop(store);
 
         assert!(aggregator.run().await.is_empty());
+    }
+
+    #[test]
+    fn batch_transactions_can_share_one_usable_timestamp() {
+        let usable_at = Instant::now();
+        let usable_at_utc = Utc::now();
+        let batch_received_at = usable_at
+            .checked_sub(std::time::Duration::from_micros(10))
+            .expect("earlier batch timestamp");
+
+        let first = Timing::at(usable_at, usable_at_utc, Some(batch_received_at), Some(0));
+        let later_position =
+            Timing::at(usable_at, usable_at_utc, Some(batch_received_at), Some(32));
+
+        assert_eq!(first.received_at, later_position.received_at);
+        assert_eq!(first.received_at_utc, later_position.received_at_utc);
+        assert_ne!(first.batch_position, later_position.batch_position);
     }
 }

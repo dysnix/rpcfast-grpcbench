@@ -5,6 +5,7 @@ use crate::proto::shredstream::{
     shredstream_proxy_client::ShredstreamProxyClient, SubscribeEntriesRequest,
 };
 use anyhow::{Context, Result};
+use chrono::Utc;
 use solana_sdk::pubkey::Pubkey;
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -100,6 +101,11 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
                 }
             };
 
+        // Deserialization makes the entire entry batch usable. All contained
+        // transactions therefore share this race timestamp; batch position is
+        // metadata only and must not introduce loop-processing delay.
+        let batch_usable_at = Instant::now();
+        let batch_usable_at_utc = Utc::now();
         let mut batch_position = 0usize;
         for entry in entries {
             for transaction in entry.transactions {
@@ -124,7 +130,12 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
                     ctx.phase(),
                     signature.to_string(),
                     endpoint_key.clone(),
-                    Timing::now(Some(batch_received_at), Some(transaction_position)),
+                    Timing::at(
+                        batch_usable_at,
+                        batch_usable_at_utc,
+                        Some(batch_received_at),
+                        Some(transaction_position),
+                    ),
                 );
             }
         }

@@ -76,7 +76,7 @@ OrbitFlare's public Jetstream endpoints normally use plain `http://`; use `https
 - `Pairwise lag`: positive receive-time lag for samples where the displayed faster endpoint was behind. `n/a` means it never lost that pair.
 - `Batch-position analysis`: signed lead grouped by the zero-based transaction position in a ShredStream or txstream batch. Positive values mean the batch endpoint led its comparison endpoint.
 
-Collectors capture a monotonic receive timestamp and enqueue each observation without awaiting aggregation. Pairwise differences use those monotonic timestamps; wall-clock time is retained only for report bounds. For Aperture txstream, only the primary (first) transaction signature is recorded. Provider timestamps such as `created_at` are intentionally ignored.
+Collectors capture a monotonic receive timestamp and enqueue each observation without awaiting aggregation. Pairwise differences use those monotonic timestamps; wall-clock time is retained only for report bounds. Batched protocols assign one timestamp to every transaction after the enclosing batch is fully decoded and usable, so loop position does not affect race timing. For Aperture txstream, only the primary (first) transaction signature is recorded. Provider timestamps such as `created_at` are intentionally ignored.
 
 ## License
 
