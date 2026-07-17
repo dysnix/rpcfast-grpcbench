@@ -1,0 +1,190 @@
+use anyhow::{anyhow, Context, Result};
+use serde::Deserialize;
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::time::Duration;
+
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[serde(rename_all = "kebab-case")]
+pub enum Protocol {
+    Yellowstone,
+    JitoShredstream,
+    ApertureTxstream,
+}
+
+impl Protocol {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Yellowstone => "yellowstone",
+            Self::JitoShredstream => "jito-shredstream",
+            Self::ApertureTxstream => "aperture-txstream",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Yellowstone => "Yellowstone",
+            Self::JitoShredstream => "Jito ShredStream",
+            Self::ApertureTxstream => "Aperture txstream",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Endpoint {
+    pub alias: String,
+    pub protocol: Protocol,
+    pub url: String,
+    pub token: String,
+    pub signatures_only: bool,
+    pub include_simulation: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Config {
+    #[serde(default, with = "humantime_serde")]
+    pub duration: Option<Duration>,
+    #[serde(default, with = "humantime_serde")]
+    pub warmup: Option<Duration>,
+    #[serde(default = "default_no_tx_timeout", with = "humantime_serde")]
+    pub no_tx_timeout: Duration,
+    #[serde(default = "default_buffer_size")]
+    pub buffer_size: usize,
+    #[serde(default)]
+    pub account_include: Vec<String>,
+    #[serde(default)]
+    pub yellowstone: BTreeMap<String, EndpointConfig>,
+    #[serde(default)]
+    pub jito_shredstream: BTreeMap<String, EndpointConfig>,
+    #[serde(default)]
+    pub aperture_txstream: BTreeMap<String, ApertureEndpointConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EndpointConfig {
+    pub url: String,
+    #[serde(default)]
+    pub x_token: Option<String>,
+    #[serde(default)]
+    pub x_token_env: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApertureEndpointConfig {
+    pub url: String,
+    #[serde(default)]
+    pub x_token: Option<String>,
+    #[serde(default)]
+    pub x_token_env: Option<String>,
+    #[serde(default = "default_aperture_signatures_only")]
+    pub signatures_only: bool,
+    #[serde(default)]
+    pub include_simulation: bool,
+}
+
+fn default_no_tx_timeout() -> Duration {
+    Duration::from_secs(30)
+}
+
+fn default_buffer_size() -> usize {
+    4 * 1024 * 1024
+}
+
+fn default_aperture_signatures_only() -> bool {
+    true
+}
+
+pub fn read_config(path: &Path) -> Result<Config> {
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
+    let config: Config =
+        toml::from_str(&content).with_context(|| format!("parse config {}", path.display()))?;
+    config.validate()?;
+    Ok(config)
+}
+
+impl Config {
+    pub fn endpoints(&self) -> Result<Vec<Endpoint>> {
+        let mut endpoints = Vec::new();
+
+        for (alias, entry) in &self.yellowstone {
+            endpoints.push(Endpoint {
+                alias: alias.clone(),
+                protocol: Protocol::Yellowstone,
+                url: entry.url.clone(),
+                token: resolve_token(entry.x_token.as_deref(), entry.x_token_env.as_deref())?,
+                signatures_only: true,
+                include_simulation: false,
+            });
+        }
+
+        for (alias, entry) in &self.jito_shredstream {
+            endpoints.push(Endpoint {
+                alias: alias.clone(),
+                protocol: Protocol::JitoShredstream,
+                url: entry.url.clone(),
+                token: resolve_token(entry.x_token.as_deref(), entry.x_token_env.as_deref())?,
+                signatures_only: true,
+                include_simulation: false,
+            });
+        }
+
+        for (alias, entry) in &self.aperture_txstream {
+            endpoints.push(Endpoint {
+                alias: alias.clone(),
+                protocol: Protocol::ApertureTxstream,
+                url: entry.url.clone(),
+                token: resolve_token(entry.x_token.as_deref(), entry.x_token_env.as_deref())?,
+                signatures_only: entry.signatures_only,
+                include_simulation: entry.include_simulation,
+            });
+        }
+
+        Ok(endpoints)
+    }
+
+    fn validate(&self) -> Result<()> {
+        let endpoint_count =
+            self.yellowstone.len() + self.jito_shredstream.len() + self.aperture_txstream.len();
+        if endpoint_count < 2 {
+            return Err(anyhow!("configure at least two endpoints to compare"));
+        }
+        Ok(())
+    }
+}
+
+fn resolve_token(value: Option<&str>, env_name: Option<&str>) -> Result<String> {
+    if let Some(value) = value {
+        return Ok(value.to_string());
+    }
+
+    match env_name {
+        Some(name) => std::env::var(name)
+            .with_context(|| format!("read token from environment variable {name}")),
+        None => Ok(String::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn aperture_include_simulation_defaults_to_false_and_can_be_enabled() {
+        let config: Config = toml::from_str(
+            r#"
+                [aperture_txstream.default]
+                url = "https://default.example.com"
+
+                [aperture_txstream.simulated]
+                url = "https://simulated.example.com"
+                include_simulation = true
+            "#,
+        )
+        .expect("parse config");
+
+        let endpoints = config.endpoints().expect("resolve endpoints");
+        assert!(!endpoints[0].include_simulation);
+        assert!(endpoints[1].include_simulation);
+    }
+}

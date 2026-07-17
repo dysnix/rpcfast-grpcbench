@@ -1,0 +1,22 @@
+# Runtime defaults can be overridden with CLI flags.
+duration = "60s"
+warmup = "5s"
+no_tx_timeout = "30s"
+buffer_size = 4194304
+
+# Optional transaction account filter shared by all protocols.
+account_include = ["CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK"]
+
+[yellowstone.rpcfast]
+url = "https://solana-yellowstone-grpc.rpcfast.com:443"
+x_token_env = "YELLOWSTONE_X_TOKEN"
+
+[jito_shredstream.jito]
+url = "https://solana-shredstream-grpc.rpcfast.com:443"
+x_token_env = "JITO_SHREDSTREAM_X_TOKEN"
+
+[aperture_txstream.rpcfast]
+url = "https://aperture-grpc.rpcfast.com:443"
+x_token_env = "APERTURE_X_TOKEN"
+signatures_only = true
+include_simulation = false
