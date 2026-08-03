@@ -58,6 +58,7 @@ pub struct Config {
     pub warmup: Option<Duration>,
     #[serde(default = "default_no_tx_timeout", with = "humantime_serde")]
     pub no_tx_timeout: Duration,
+    /// Receive-side byte budget used for gRPC HTTP/2 stream and connection windows.
     #[serde(default = "default_buffer_size")]
     pub buffer_size: usize,
     #[serde(default)]

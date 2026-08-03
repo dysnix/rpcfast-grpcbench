@@ -222,9 +222,9 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "aperture-grpc-client"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53196555e533306d5f6f804f418ba999175a1228dfe0284d850a2408d4b77814"
+checksum = "e0f5fcfd38cef95edb181d5ff6a5dc6bd389d6de4c54f1f78e7988796d8c459d"
 dependencies = [
  "aperture-grpc-proto",
  "async-stream",
@@ -237,9 +237,9 @@ dependencies = [
 
 [[package]]
 name = "aperture-grpc-proto"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9d06f5a19ee5f2895d9406ccb47ac6b37caa2f01ff897963002c0db69ca3e49"
+checksum = "27794eb8c877ce34b8304f4c17ae66a78ba1b259cbba3ce74cd2c4a2bbec3a9a"
 dependencies = [
  "prost 0.14.4",
  "protoc-bin-vendored",
@@ -3216,6 +3216,7 @@ dependencies = [
  "tokio-util",
  "toml 0.8.23",
  "tonic 0.13.1",
+ "tonic 0.14.6",
  "tonic-build 0.13.1",
  "tracing",
  "tracing-subscriber",

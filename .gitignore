@@ -1,3 +1,5 @@
 /target
 grpcbench.toml
-grpcbench-report.html
+*.html
+*.toml
+!grpcbench.example.toml

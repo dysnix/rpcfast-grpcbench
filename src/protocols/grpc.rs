@@ -1,3 +1,4 @@
+use super::http2_window_size;
 use anyhow::{Context, Result};
 use std::time::Duration;
 use tonic::{
@@ -7,10 +8,12 @@ use tonic::{
 };
 
 pub async fn build_channel(url: &str, buffer_size: usize) -> Result<Channel> {
+    let window_size = http2_window_size(buffer_size);
     let mut endpoint = Channel::from_shared(url.to_string())?
         .tcp_keepalive(Some(Duration::from_secs(30)))
         .tcp_nodelay(true)
-        .buffer_size(buffer_size);
+        .initial_stream_window_size(window_size)
+        .initial_connection_window_size(window_size);
     if url.starts_with("https://") {
         endpoint = endpoint.tls_config(
             ClientTlsConfig::new()

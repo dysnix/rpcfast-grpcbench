@@ -3,13 +3,15 @@ use crate::config::{Endpoint, Protocol};
 use crate::observation::{EndpointKey, Timing};
 use anyhow::{Context, Result};
 use aperture_grpc_client::{
-    ApertureClientConfig, ApertureGrpcClient, DecodedTransaction, SubscribeFilters, VoteFilter,
+    aperture_client::ApertureClient, ApertureClientConfig, DecodedTransaction,
+    DecodedTransactionBatch, SubscribeFilters, SubscribeTransactionsRequest, VoteFilter,
 };
 use chrono::Utc;
 use futures::StreamExt;
 use solana_sdk::{pubkey::Pubkey, signature::Signature};
 use std::str::FromStr;
 use std::time::{Duration, Instant};
+use tonic_aperture::transport::{Channel, ClientTlsConfig, Endpoint as TonicEndpoint};
 use tracing::{error, info, warn};
 
 pub async fn run(endpoint: Endpoint, ctx: CollectorContext) {
@@ -38,7 +40,6 @@ pub async fn run(endpoint: Endpoint, ctx: CollectorContext) {
 }
 
 async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<()> {
-    let client = ApertureGrpcClient::new(client_config(endpoint, ctx.buffer_size));
     let filters = subscribe_filters(
         &ctx.account_include,
         endpoint.signatures_only,
@@ -52,11 +53,16 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
     );
 
     let endpoint_key = EndpointKey::new(Protocol::ApertureTxstream, endpoint.alias.clone());
+    let mut client = connect(endpoint, ctx.buffer_size).await?;
+    let request = subscribe_request(endpoint, filters)?;
     if endpoint.batch_mode {
-        let stream = client.subscribe_batches_with_reconnect(filters);
+        let stream = client
+            .subscribe_transaction_batches(request)
+            .await?
+            .into_inner();
         collect_batches(endpoint, ctx, endpoint_key, Box::pin(stream)).await
     } else {
-        let stream = client.subscribe_with_reconnect(filters);
+        let stream = client.subscribe_transactions(request).await?.into_inner();
         collect_transactions(endpoint, ctx, endpoint_key, Box::pin(stream)).await
     }
 }
@@ -68,9 +74,7 @@ async fn collect_transactions<S>(
     mut stream: std::pin::Pin<Box<S>>,
 ) -> Result<()>
 where
-    S: futures::Stream<
-            Item = Result<DecodedTransaction, aperture_grpc_client::ApertureGrpcClientError>,
-        > + ?Sized,
+    S: futures::Stream<Item = Result<DecodedTransaction, tonic_aperture::Status>> + ?Sized,
 {
     let mut last_tx = Instant::now();
 
@@ -104,12 +108,7 @@ async fn collect_batches<S>(
     mut stream: std::pin::Pin<Box<S>>,
 ) -> Result<()>
 where
-    S: futures::Stream<
-            Item = Result<
-                aperture_grpc_client::DecodedTransactionBatch,
-                aperture_grpc_client::ApertureGrpcClientError,
-            >,
-        > + ?Sized,
+    S: futures::Stream<Item = Result<DecodedTransactionBatch, tonic_aperture::Status>> + ?Sized,
 {
     let mut last_tx = Instant::now();
 
@@ -189,7 +188,7 @@ fn primary_signature(tx: &DecodedTransaction) -> Result<Option<String>> {
 }
 
 fn client_config(endpoint: &Endpoint, buffer_size: usize) -> ApertureClientConfig {
-    let window_size = u32::try_from(buffer_size).unwrap_or(u32::MAX);
+    let window_size = super::http2_window_size(buffer_size);
     let mut config = ApertureClientConfig::new(endpoint.url.clone());
     config.max_decoding_message_size = buffer_size;
     config.max_encoding_message_size = buffer_size;
@@ -200,6 +199,67 @@ fn client_config(endpoint: &Endpoint, buffer_size: usize) -> ApertureClientConfi
         config.x_token = Some(endpoint.token.clone());
     }
     config
+}
+
+async fn connect(endpoint: &Endpoint, buffer_size: usize) -> Result<ApertureClient<Channel>> {
+    let config = client_config(endpoint, buffer_size);
+    let mut transport = TonicEndpoint::from_shared(config.endpoint.clone())?
+        .connect_timeout(config.connect_timeout)
+        .tcp_nodelay(config.tcp_nodelay)
+        .http2_adaptive_window(config.http2_adaptive_window)
+        .keep_alive_while_idle(config.keep_alive_while_idle);
+
+    if let Some(interval) = config.http2_keep_alive_interval {
+        transport = transport.http2_keep_alive_interval(interval);
+    }
+    if let Some(timeout) = config.http2_keep_alive_timeout {
+        transport = transport.keep_alive_timeout(timeout);
+    }
+    if let Some(size) = config.initial_stream_window_size {
+        transport = transport.initial_stream_window_size(size);
+    }
+    if let Some(size) = config.initial_connection_window_size {
+        transport = transport.initial_connection_window_size(size);
+    }
+    if let Some(user_agent) = &config.user_agent {
+        transport = transport.user_agent(user_agent.clone())?;
+    }
+    if endpoint.url.starts_with("https://") {
+        transport = transport.tls_config(ClientTlsConfig::new().with_enabled_roots())?;
+    }
+
+    let channel = transport
+        .connect()
+        .await
+        .with_context(|| format!("connect {}", endpoint.url))?;
+    Ok(ApertureClient::new(channel)
+        .max_decoding_message_size(config.max_decoding_message_size)
+        .max_encoding_message_size(config.max_encoding_message_size))
+}
+
+fn subscribe_request(
+    endpoint: &Endpoint,
+    filters: SubscribeFilters,
+) -> Result<tonic_aperture::Request<SubscribeTransactionsRequest>> {
+    let features = if endpoint.include_simulation {
+        "txstream,simulation"
+    } else {
+        "txstream"
+    };
+    let mut request = tonic_aperture::Request::new(filters.into());
+    request.metadata_mut().insert(
+        "x-user-id",
+        tonic_aperture::metadata::MetadataValue::from_static("grpcbench"),
+    );
+    request.metadata_mut().insert(
+        "x-aperture-features",
+        tonic_aperture::metadata::MetadataValue::from_static(features),
+    );
+    if !endpoint.token.is_empty() {
+        let token = endpoint.token.parse().context("invalid x-token")?;
+        request.metadata_mut().insert("x-token", token);
+    }
+    Ok(request)
 }
 
 fn subscribe_filters(

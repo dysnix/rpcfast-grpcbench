@@ -1,4 +1,4 @@
-use super::CollectorContext;
+use super::{http2_window_size, CollectorContext};
 use crate::config::{Endpoint, Protocol};
 use crate::observation::{EndpointKey, Timing};
 use anyhow::{Context, Result};
@@ -39,9 +39,11 @@ pub async fn run(endpoint: Endpoint, ctx: CollectorContext) {
 }
 
 async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<()> {
+    let window_size = http2_window_size(ctx.buffer_size);
     let mut builder = GeyserGrpcClient::build_from_shared(endpoint.url.clone())?
         .tls_config(ClientTlsConfig::new().with_enabled_roots())?
-        .buffer_size(ctx.buffer_size)
+        .initial_stream_window_size(window_size)
+        .initial_connection_window_size(window_size)
         .tcp_nodelay(true);
 
     if !endpoint.token.is_empty() {
@@ -64,9 +66,18 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
         ..Default::default()
     };
 
-    let (mut subscribe_tx, mut stream) = client
-        .subscribe_with_request(Some(subscribe_request))
-        .await?;
+    let (mut subscribe_tx, subscribe_rx) = futures::channel::mpsc::unbounded();
+    subscribe_tx.send(subscribe_request).await?;
+    let mut request = yellowstone_grpc_proto::tonic::Request::new(subscribe_rx);
+    request.metadata_mut().insert(
+        "x-user-id",
+        yellowstone_grpc_proto::tonic::metadata::MetadataValue::from_static("grpcbench"),
+    );
+    request.metadata_mut().insert(
+        "x-aperture-features",
+        yellowstone_grpc_proto::tonic::metadata::MetadataValue::from_static("yellowstone"),
+    );
+    let mut stream = client.geyser.subscribe(request).await?.into_inner();
     info!(
         endpoint = endpoint.alias,
         url = endpoint.url,

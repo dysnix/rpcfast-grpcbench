@@ -15,6 +15,10 @@ pub mod shreder_binary;
 pub mod shredstream;
 pub mod yellowstone;
 
+pub(crate) fn http2_window_size(buffer_size: usize) -> u32 {
+    u32::try_from(buffer_size).unwrap_or(u32::MAX)
+}
+
 #[derive(Clone)]
 pub struct CollectorContext {
     pub store: ObservationStore,
@@ -46,4 +50,15 @@ pub fn spawn_endpoint(endpoint: Endpoint, ctx: CollectorContext) -> tokio::task:
             Protocol::Jetstream => jetstream::run(endpoint, ctx).await,
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::http2_window_size;
+
+    #[test]
+    fn http2_window_size_saturates_at_protocol_limit() {
+        assert_eq!(http2_window_size(4 * 1024 * 1024), 4 * 1024 * 1024);
+        assert_eq!(http2_window_size(usize::MAX), u32::MAX);
+    }
 }

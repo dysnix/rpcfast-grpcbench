@@ -60,6 +60,8 @@ url = "http://fra.jetstream.orbitflare.com"
 ```
 
 Endpoint table names become report aliases. Tokens can be supplied inline with `x_token`, but `x_token_env` is recommended.
+`buffer_size` is a byte count used for the gRPC clients' HTTP/2 stream and connection receive
+windows (and for Aperture's message-size limits). It is not a request-count queue capacity.
 For Aperture endpoints, `include_simulation` requests transaction simulation results and defaults to `false`.
 For Aperture endpoints, `batch_mode` uses `SubscribeTransactionBatches` and defaults to `false`; the normal mode uses `SubscribeTransactions`.
 Shared Corvus aRPC endpoints are IP-allowlisted and do not need a token; dedicated endpoints can set `x_token` or `x_token_env`.

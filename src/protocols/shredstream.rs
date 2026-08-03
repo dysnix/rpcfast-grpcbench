@@ -144,9 +144,11 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
 
 async fn build_channel(url: &str, buffer_size: usize) -> Result<Channel> {
     let host = host_from_url(url)?;
+    let window_size = super::http2_window_size(buffer_size);
     let mut endpoint = Channel::from_shared(url.to_string())?
         .tcp_keepalive(Some(Duration::from_secs(30)))
-        .buffer_size(buffer_size);
+        .initial_stream_window_size(window_size)
+        .initial_connection_window_size(window_size);
     if url.starts_with("https://") {
         endpoint = endpoint.tls_config(
             ClientTlsConfig::new()
