@@ -248,10 +248,6 @@ fn subscribe_request(
     };
     let mut request = tonic_aperture::Request::new(filters.into());
     request.metadata_mut().insert(
-        "x-user-id",
-        tonic_aperture::metadata::MetadataValue::from_static("grpcbench"),
-    );
-    request.metadata_mut().insert(
         "x-aperture-features",
         tonic_aperture::metadata::MetadataValue::from_static(features),
     );

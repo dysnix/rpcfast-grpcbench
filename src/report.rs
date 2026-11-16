@@ -8,6 +8,10 @@ use terminal_size::{terminal_size, Width};
 
 const DEFAULT_TERMINAL_WIDTH: usize = 120;
 const MIN_TERMINAL_WIDTH: usize = 72;
+/// Avg, median, p90, p95 and p99 columns of the ranking and pairwise tables.
+const LATENCY_COLUMNS: usize = 5;
+/// Fits a signed value such as `-123.45 ms`.
+const LATENCY_WIDTH: usize = 10;
 
 #[derive(Debug, Serialize)]
 pub struct ReportMeta {
@@ -68,18 +72,18 @@ pub fn render_report(meta: &ReportMeta, endpoints: &[Endpoint], stats: &Benchmar
     html.push_str("</section>");
 
     html.push_str("<section><h2>Endpoint ranking</h2><div class=\"table-wrap\"><table>");
-    html.push_str("<thead><tr><th>Rank</th><th>Endpoint</th><th>Protocol</th><th>Unique txs</th><th>Coverage</th><th>Wins</th><th>Win rate</th><th>Median lag</th><th>p95 lag</th></tr></thead><tbody>");
+    html.push_str("<thead><tr><th>Rank</th><th>Endpoint</th><th>Protocol</th><th>Unique txs</th><th>Coverage</th><th>Wins</th><th>Win rate</th><th>Avg lag</th><th>Median lag</th><th>p90 lag</th><th>p95 lag</th><th>p99 lag</th></tr></thead><tbody>");
     for (idx, endpoint) in stats.endpoint_summaries.iter().enumerate() {
         endpoint_row(&mut html, idx + 1, endpoint);
     }
     html.push_str("</tbody></table></div></section>");
 
     html.push_str("<section><h2>Pairwise winners</h2><div class=\"table-wrap\"><table>");
-    html.push_str("<thead><tr><th>Faster endpoint</th><th>Slower endpoint</th><th>Shared txs</th><th>Wins</th><th>Win rate</th><th>Median lead</th><th>p95 lead</th><th>Median lag</th><th>p95 lag</th></tr></thead><tbody>");
+    html.push_str("<thead><tr><th>Faster endpoint</th><th>Slower endpoint</th><th>Shared txs</th><th>Wins</th><th>Win rate</th><th>Avg lead</th><th>Median lead</th><th>p90 lead</th><th>p95 lead</th><th>p99 lead</th></tr></thead><tbody>");
     for pair in stats.pairwise.iter().take(30) {
         pair_row(&mut html, pair);
     }
-    html.push_str("</tbody></table></div></section>");
+    html.push_str("</tbody></table></div><p>Lead is the slower endpoint's receive time minus the faster endpoint's, over every shared transaction, including those the faster endpoint lost. Lag in the ranking is the time behind the first endpoint to deliver the transaction.</p></section>");
 
     if !stats.batch_positions.is_empty() {
         html.push_str("<section><h2>Batch-position analysis</h2><details><summary>Open batch-position analysis</summary><div class=\"table-wrap details-table\"><table>");
@@ -259,7 +263,7 @@ pub fn render_terminal_report(
     terminal_header(
         &mut out,
         &format!(
-            "  {:<3} {:<endpoint_width$} {:<protocol_width$} {:>10} {:>9} {:>8} {:>9} {:>11} {:>11}",
+            "  {:<3} {:<endpoint_width$} {:<protocol_width$} {:>10} {:>9} {:>8} {:>9} {:>10} {:>10} {:>10} {:>10} {:>10}",
             "#",
             "Endpoint",
             "Protocol",
@@ -267,8 +271,11 @@ pub fn render_terminal_report(
             "Coverage",
             "Wins",
             "Win rate",
+            "Avg lag",
             "Med lag",
+            "P90 lag",
             "P95 lag",
+            "P99 lag",
             endpoint_width = ranking_layout.endpoint_width,
             protocol_width = ranking_layout.protocol_width,
         ),
@@ -278,7 +285,7 @@ pub fn render_terminal_report(
         terminal_data(
             &mut out,
             &format!(
-                "  {:<3} {:<endpoint_width$} {:<protocol_width$} {:>10} {:>8.1}% {:>8} {:>8.1}% {:>11} {:>11}",
+                "  {:<3} {:<endpoint_width$} {:<protocol_width$} {:>10} {:>8.1}% {:>8} {:>8.1}% {:>10} {:>10} {:>10} {:>10} {:>10}",
                 idx + 1,
                 truncate(&endpoint.alias, ranking_layout.endpoint_width),
                 truncate(&endpoint.protocol_label, ranking_layout.protocol_width),
@@ -286,8 +293,11 @@ pub fn render_terminal_report(
                 endpoint.coverage_pct,
                 endpoint.wins,
                 endpoint.win_pct,
+                fmt_us(endpoint.avg_lag_us),
                 fmt_us(endpoint.median_lag_us),
+                fmt_us(endpoint.p90_lag_us),
                 fmt_us(endpoint.p95_lag_us),
+                fmt_us(endpoint.p99_lag_us),
                 endpoint_width = ranking_layout.endpoint_width,
                 protocol_width = ranking_layout.protocol_width,
             ),
@@ -301,16 +311,17 @@ pub fn render_terminal_report(
         terminal_header(
             &mut out,
             &format!(
-                "  {:<faster_width$} {:<slower_width$} {:>9} {:>8} {:>9} {:>11} {:>11} {:>11} {:>11}",
+                "  {:<faster_width$} {:<slower_width$} {:>9} {:>8} {:>9} {:>10} {:>10} {:>10} {:>10} {:>10}",
                 "Faster",
                 "Slower",
                 "Shared",
                 "Wins",
                 "Win rate",
+                "Avg lead",
                 "Med lead",
+                "P90 lead",
                 "P95 lead",
-                "Med lag",
-                "P95 lag",
+                "P99 lead",
                 faster_width = pairwise_layout.faster_width,
                 slower_width = pairwise_layout.slower_width,
             ),
@@ -320,16 +331,17 @@ pub fn render_terminal_report(
             terminal_data(
                 &mut out,
                 &format!(
-                    "  {:<faster_width$} {:<slower_width$} {:>9} {:>8} {:>8.1}% {:>11} {:>11} {:>11} {:>11}",
+                    "  {:<faster_width$} {:<slower_width$} {:>9} {:>8} {:>8.1}% {:>10} {:>10} {:>10} {:>10} {:>10}",
                     truncate(&pair.faster_alias, pairwise_layout.faster_width),
                     truncate(&pair.slower_alias, pairwise_layout.slower_width),
                     pair.shared_signatures,
                     pair.wins,
                     pair.win_pct,
-                    fmt_us(pair.median_lag_us),
-                    fmt_us(pair.p95_lag_us),
-                    fmt_us(pair.median_behind_us),
-                    fmt_us(pair.p95_behind_us),
+                    fmt_us(pair.avg_lead_us),
+                    fmt_us(pair.median_lead_us),
+                    fmt_us(pair.p90_lead_us),
+                    fmt_us(pair.p95_lead_us),
+                    fmt_us(pair.p99_lead_us),
                     faster_width = pairwise_layout.faster_width,
                     slower_width = pairwise_layout.slower_width,
                 ),
@@ -390,7 +402,7 @@ fn kpi(html: &mut String, label: &str, value: String) {
 fn endpoint_row(html: &mut String, rank: usize, endpoint: &EndpointSummary) {
     write!(
         html,
-        "<tr><td>{}</td><td><strong>{}</strong></td><td>{}</td><td>{}</td><td>{:.1}%</td><td>{}</td><td>{:.1}%</td><td>{}</td><td>{}</td></tr>",
+        "<tr><td>{}</td><td><strong>{}</strong></td><td>{}</td><td>{}</td><td>{:.1}%</td><td>{}</td><td>{:.1}%</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
         rank,
         escape(&endpoint.alias),
         escape(&endpoint.protocol_label),
@@ -398,8 +410,11 @@ fn endpoint_row(html: &mut String, rank: usize, endpoint: &EndpointSummary) {
         endpoint.coverage_pct,
         endpoint.wins,
         endpoint.win_pct,
+        fmt_us(endpoint.avg_lag_us),
         fmt_us(endpoint.median_lag_us),
-        fmt_us(endpoint.p95_lag_us)
+        fmt_us(endpoint.p90_lag_us),
+        fmt_us(endpoint.p95_lag_us),
+        fmt_us(endpoint.p99_lag_us)
     )
     .ok();
 }
@@ -407,16 +422,17 @@ fn endpoint_row(html: &mut String, rank: usize, endpoint: &EndpointSummary) {
 fn pair_row(html: &mut String, pair: &PairwiseSummary) {
     write!(
         html,
-        "<tr><td><strong>{}</strong></td><td><strong>{}</strong></td><td>{}</td><td>{}</td><td>{:.1}%</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+        "<tr><td><strong>{}</strong></td><td><strong>{}</strong></td><td>{}</td><td>{}</td><td>{:.1}%</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
         escape(&pair.faster_alias),
         escape(&pair.slower_alias),
         pair.shared_signatures,
         pair.wins,
         pair.win_pct,
-        fmt_us(pair.median_lag_us),
-        fmt_us(pair.p95_lag_us),
-        fmt_us(pair.median_behind_us),
-        fmt_us(pair.p95_behind_us)
+        fmt_us(pair.avg_lead_us),
+        fmt_us(pair.median_lead_us),
+        fmt_us(pair.p90_lead_us),
+        fmt_us(pair.p95_lead_us),
+        fmt_us(pair.p99_lead_us)
     )
     .ok();
 }
@@ -541,10 +557,7 @@ impl RankingTableLayout {
             + 8
             + 1
             + 9
-            + 1
-            + 11
-            + 1
-            + 11
+            + LATENCY_COLUMNS * (1 + LATENCY_WIDTH)
     }
 }
 
@@ -566,7 +579,12 @@ fn ranking_table_layout(
             .unwrap_or(0)
             .max("Protocol".len()),
     ];
-    shrink_columns(&mut widths, &[8, 8], terminal_width, 71);
+    let fixed_width = RankingTableLayout {
+        endpoint_width: 0,
+        protocol_width: 0,
+    }
+    .total_width();
+    shrink_columns(&mut widths, &[8, 8], terminal_width, fixed_width);
     RankingTableLayout {
         endpoint_width: widths[0],
         protocol_width: widths[1],
@@ -590,14 +608,7 @@ impl PairwiseTableLayout {
             + 8
             + 1
             + 9
-            + 1
-            + 11
-            + 1
-            + 11
-            + 1
-            + 11
-            + 1
-            + 11
+            + LATENCY_COLUMNS * (1 + LATENCY_WIDTH)
     }
 }
 
@@ -618,7 +629,12 @@ fn pairwise_table_layout(pairs: &[PairwiseSummary], terminal_width: usize) -> Pa
             .unwrap_or(0)
             .max("Slower".len()),
     ];
-    shrink_columns(&mut widths, &[12, 12], terminal_width, 80);
+    let fixed_width = PairwiseTableLayout {
+        faster_width: 0,
+        slower_width: 0,
+    }
+    .total_width();
+    shrink_columns(&mut widths, &[12, 12], terminal_width, fixed_width);
     PairwiseTableLayout {
         faster_width: widths[0],
         slower_width: widths[1],
@@ -807,10 +823,11 @@ mod tests {
                 shared_signatures: 1,
                 wins: 1,
                 win_pct: 100.0,
-                median_lag_us: Some(1),
-                p95_lag_us: Some(1),
-                median_behind_us: Some(2),
-                p95_behind_us: Some(2),
+                avg_lead_us: Some(1),
+                median_lead_us: Some(1),
+                p90_lead_us: Some(1),
+                p95_lead_us: Some(1),
+                p99_lead_us: Some(1),
             }],
             batch_positions: Vec::new(),
             total_unique_signatures: 0,
@@ -865,10 +882,11 @@ mod tests {
                 shared_signatures: 1,
                 wins: 1,
                 win_pct: 100.0,
-                median_lag_us: Some(1),
-                p95_lag_us: Some(1),
-                median_behind_us: Some(2),
-                p95_behind_us: Some(2),
+                avg_lead_us: Some(1),
+                median_lead_us: Some(1),
+                p90_lead_us: Some(1),
+                p95_lead_us: Some(1),
+                p99_lead_us: Some(1),
             }],
             180,
         );

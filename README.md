@@ -72,10 +72,9 @@ OrbitFlare's public Jetstream endpoints normally use plain `http://`; use `https
 - `Observed signatures`: unique signatures seen by at least one endpoint during the measured window.
 - `Race eligible`: signatures seen by at least two endpoints.
 - `Wins`: times an endpoint was first among endpoints that saw the same signature.
-- `Lag`: local receive-time delay behind the fastest endpoint for the same signature.
+- `Lag`: local receive-time delay behind the fastest endpoint for the same signature, shown as average, median, p90, p95 and p99. The endpoint that was first counts with zero lag.
 - `Pairwise winners`: one row per endpoint pair. `Wins` counts how often the displayed faster endpoint arrived first within shared signatures.
-- `Pairwise lead`: signed receive-time delta for the displayed faster endpoint. Positive values mean it led; negative values mean it was behind for that sample.
-- `Pairwise lag`: positive receive-time lag for samples where the displayed faster endpoint was behind. `n/a` means it never lost that pair.
+- `Pairwise lead`: signed receive-time delta for the displayed faster endpoint over every shared signature, including those it lost, shown as average, median, p90, p95 and p99. Positive values mean it led; negative values mean it was behind.
 - `Batch-position analysis`: signed lead grouped by the zero-based transaction position in a ShredStream or txstream batch. Positive values mean the batch endpoint led its comparison endpoint.
 
 Collectors capture a monotonic receive timestamp and enqueue each observation without awaiting aggregation. Pairwise differences use those monotonic timestamps; wall-clock time is retained only for report bounds. Batched protocols assign one timestamp to every transaction after the enclosing batch is fully decoded and usable, so loop position does not affect race timing. For Aperture txstream, only the primary (first) transaction signature is recorded. Provider timestamps such as `created_at` are intentionally ignored.

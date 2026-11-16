@@ -30,6 +30,9 @@ pub struct EndpointSummary {
     pub win_pct: f64,
     pub median_lag_us: Option<i64>,
     pub p95_lag_us: Option<i64>,
+    pub avg_lag_us: Option<i64>,
+    pub p90_lag_us: Option<i64>,
+    pub p99_lag_us: Option<i64>,
     pub max_lag_us: Option<i64>,
     pub decode_latency_median_us: Option<i64>,
     pub first_seen: Option<DateTime<Utc>>,
@@ -45,10 +48,13 @@ pub struct PairwiseSummary {
     pub shared_signatures: u64,
     pub wins: u64,
     pub win_pct: f64,
-    pub median_lag_us: Option<i64>,
-    pub p95_lag_us: Option<i64>,
-    pub median_behind_us: Option<i64>,
-    pub p95_behind_us: Option<i64>,
+    /// Signed lead of the faster endpoint over every shared transaction,
+    /// including those it lost; negative means it was behind.
+    pub avg_lead_us: Option<i64>,
+    pub median_lead_us: Option<i64>,
+    pub p90_lead_us: Option<i64>,
+    pub p95_lead_us: Option<i64>,
+    pub p99_lead_us: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -220,6 +226,9 @@ pub fn compute_stats(
         acc.summary.win_pct = pct(acc.summary.wins, race_eligible as u64);
         acc.summary.median_lag_us = percentile_sorted(&acc.lag_us, 0.50);
         acc.summary.p95_lag_us = percentile_sorted(&acc.lag_us, 0.95);
+        acc.summary.avg_lag_us = average(&acc.lag_us);
+        acc.summary.p90_lag_us = percentile_sorted(&acc.lag_us, 0.90);
+        acc.summary.p99_lag_us = percentile_sorted(&acc.lag_us, 0.99);
         acc.summary.max_lag_us = acc.lag_us.last().copied();
         acc.summary.decode_latency_median_us = percentile_sorted(&acc.decode_latency_us, 0.50);
         endpoint_summaries.push(acc.summary);
@@ -235,13 +244,7 @@ pub fn compute_stats(
             let right_lead_us = acc.left_lead_us.drain(..).map(|value| -value).collect();
             (right, left, acc.right_wins, right_lead_us)
         };
-        let mut behind_us: Vec<_> = lead_us
-            .iter()
-            .filter(|value| **value < 0)
-            .map(|value| -value)
-            .collect();
         lead_us.sort_unstable();
-        behind_us.sort_unstable();
         pairwise.push(PairwiseSummary {
             faster_alias: faster.alias,
             faster_protocol: faster.protocol,
@@ -250,10 +253,11 @@ pub fn compute_stats(
             shared_signatures: acc.shared,
             wins,
             win_pct: pct(wins, acc.shared),
-            median_lag_us: percentile_sorted(&lead_us, 0.50),
-            p95_lag_us: percentile_sorted(&lead_us, 0.95),
-            median_behind_us: percentile_sorted(&behind_us, 0.50),
-            p95_behind_us: percentile_sorted(&behind_us, 0.95),
+            avg_lead_us: average(&lead_us),
+            median_lead_us: percentile_sorted(&lead_us, 0.50),
+            p90_lead_us: percentile_sorted(&lead_us, 0.90),
+            p95_lead_us: percentile_sorted(&lead_us, 0.95),
+            p99_lead_us: percentile_sorted(&lead_us, 0.99),
         });
     }
     pairwise.sort_by(|a, b| {
@@ -319,6 +323,13 @@ fn pct(value: u64, total: u64) -> f64 {
     }
 }
 
+fn average(values: &[i64]) -> Option<i64> {
+    if values.is_empty() {
+        return None;
+    }
+    Some((values.iter().sum::<i64>() as f64 / values.len() as f64).round() as i64)
+}
+
 fn percentile_sorted(values: &[i64], percentile: f64) -> Option<i64> {
     if values.is_empty() {
         return None;
@@ -382,6 +393,8 @@ mod tests {
         assert_eq!(stats.endpoint_summaries[0].wins, 1);
         assert_eq!(stats.endpoint_summaries[1].repeated_signatures, 1);
         assert_eq!(stats.endpoint_summaries[1].median_lag_us, Some(500));
+        assert_eq!(stats.endpoint_summaries[1].avg_lag_us, Some(500));
+        assert_eq!(stats.endpoint_summaries[1].p99_lag_us, Some(500));
     }
 
     #[test]
@@ -443,10 +456,12 @@ mod tests {
         assert_eq!(pair.shared_signatures, 3);
         assert_eq!(pair.wins, 2);
         assert_eq!(pair.win_pct, 100.0 * 2.0 / 3.0);
-        assert_eq!(pair.median_lag_us, Some(200));
-        assert_eq!(pair.p95_lag_us, Some(500));
-        assert_eq!(pair.median_behind_us, Some(100));
-        assert_eq!(pair.p95_behind_us, Some(100));
+        // Signed leads: -100, 200, 500.
+        assert_eq!(pair.avg_lead_us, Some(200));
+        assert_eq!(pair.median_lead_us, Some(200));
+        assert_eq!(pair.p90_lead_us, Some(500));
+        assert_eq!(pair.p95_lead_us, Some(500));
+        assert_eq!(pair.p99_lead_us, Some(500));
     }
 
     #[test]
