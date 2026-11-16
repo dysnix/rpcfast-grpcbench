@@ -70,10 +70,6 @@ async fn subscribe_once(endpoint: &Endpoint, ctx: &CollectorContext) -> Result<(
     subscribe_tx.send(subscribe_request).await?;
     let mut request = yellowstone_grpc_proto::tonic::Request::new(subscribe_rx);
     request.metadata_mut().insert(
-        "x-user-id",
-        yellowstone_grpc_proto::tonic::metadata::MetadataValue::from_static("grpcbench"),
-    );
-    request.metadata_mut().insert(
         "x-aperture-features",
         yellowstone_grpc_proto::tonic::metadata::MetadataValue::from_static("yellowstone"),
     );
